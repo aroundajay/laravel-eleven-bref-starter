@@ -1,0 +1,120 @@
+service: LaravelElevenBrefStarter
+
+provider:
+  name: aws
+  # The AWS region in which to deploy (us-east-1 is the default)
+  region: ap-south-1
+  # AWS profile
+  profile: serverless-admin-nearbycatalogue
+  # Environment variables
+  environment:
+    AWS_DEFAULT_REGION: ap-south-1
+    APP_ENV: ${sls:stage} # Or use ${sls:stage} if you want the environment to match the stage
+    FILESYSTEM_DISK: s3
+    AWS_BUCKET: !Ref LaravelElevenBrefStarterStorage
+    QUEUE_CONNECTION: sqs
+    SQS_QUEUE: ${construct:jobs.queueUrl}
+    DYNAMODB_CACHE_TABLE: !Ref LaravelElevenBrefStarterCacheTable
+    MAINTENANCE_MODE: ${param:maintenance, null}
+    ASSET_URL: ${construct:asset.url}
+    DATABASE_URL: ${ssm:/bref-app/${sls:stage}/LaravelElevenBrefStarterDatabaseUrl}
+  iam:
+    role:
+      statements:
+        # Allow Lambda to read and write files in the S3 buckets
+        - Effect: Allow
+          Action: s3:*
+          Resource:
+            - !Sub "${LaravelElevenBrefStarterStorage.Arn}"
+            - !Sub "${LaravelElevenBrefStarterStorage.Arn}/*"
+        - Effect: Allow
+          Resource: !GetAtt LaravelElevenBrefStarterCacheTable.Arn
+          Action:
+            - dynamodb:DescribeTable
+            - dynamodb:Query
+            - dynamodb:Scan
+            - dynamodb:GetItem
+            - dynamodb:PutItem
+            - dynamodb:UpdateItem
+            - dynamodb:DeleteItem
+
+package:
+  # Files and directories to exclude from deployment
+  patterns:
+    - '!node_modules/**'
+    - '!public/storage'
+    - '!resources/assets/**'
+    - '!storage/**'
+    - '!tests/**'
+
+functions:
+
+  # This function runs the Laravel website/API
+  web:
+    handler: public/index.php
+    runtime: php-81-fpm
+    timeout: 28 # in seconds (API Gateway has a timeout of 29 seconds)
+    events:
+      - httpApi: '*'
+      - schedule:
+          rate: rate(5 minutes)
+          input:
+            warmer: true
+
+  # This function lets us run artisan commands in Lambda
+  artisan:
+    handler: artisan
+    runtime: php-81-console
+    timeout: 720 # in seconds
+    # Uncomment to also run the scheduler every minute
+    events:
+       - schedule:
+             rate: rate(1 minute)
+             input: '"schedule:run"'
+
+constructs:
+  asset:
+    type: server-side-website
+    assets:
+      "/js/*": public/js
+      "/css/*": public/css
+      "/build/*": public/build
+      "/favicon.ico": public/favicon.ico
+      "/robots.txt": public/robots.txt
+
+  jobs:
+    type: queue
+    worker:
+      handler: Bref\LaravelBridge\Queue\QueueHandler
+      runtime: php-81
+      timeout: 60
+
+resources:
+  Resources:
+    LaravelElevenBrefStarterStorage: # S3 storage bucket to link storage files
+      Type: AWS::S3::Bucket
+      Properties:
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: false
+        OwnershipControls:
+          Rules:
+            - ObjectOwnership: ObjectWriter
+
+    LaravelElevenBrefStarterCacheTable: # DynamoDB table to use cache
+      Type: AWS::DynamoDB::Table
+      Properties:
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        BillingMode: PAY_PER_REQUEST
+        TimeToLiveSpecification:
+          AttributeName: ttl
+          Enabled: true
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+
+plugins:
+  # We need to include the Bref plugin
+  - ./vendor/bref/bref
+  - serverless-lift
