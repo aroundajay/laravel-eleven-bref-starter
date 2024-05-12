@@ -17,7 +17,7 @@ provider:
     DYNAMODB_CACHE_TABLE: !Ref LaravelElevenBrefStarterCacheTable
     MAINTENANCE_MODE: ${param:maintenance, null}
     ASSET_URL: ${construct:asset.url}
-    DATABASE_URL: ${ssm:/bref-app/${sls:stage}/LaravelElevenBrefStarterDatabaseUrl}
+    DB_URL: ${ssm:/bref-app/${sls:stage}/LaravelElevenBrefStarterDatabaseUrl}
   iam:
     role:
       statements:
